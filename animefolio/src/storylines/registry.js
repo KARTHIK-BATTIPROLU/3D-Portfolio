@@ -18,8 +18,8 @@ import { lazy } from "react";
 
 export const STORYLINES = [
   {
-    id: "hub-world",
-    name: "Hub World",
+    id: "metaverse",
+    name: "The Metaverse",
     navMode: "free-roam",
     theme: { primary: "#00d4ff", bg: "#0a0e27" },
     // per-scene post-processing grade (Phase 0) — tuned to each world's mood
@@ -28,12 +28,12 @@ export const STORYLINES = [
       dof: { enabled: true, focalLength: 0.018, bokehScale: 2.2 },
       grade: { hue: 0.0, saturation: 0.16, brightness: 0.0, contrast: 0.12 },
     },
-    Component: lazy(() => import("./HubWorld.jsx")),
-    preload: () => import("./HubWorld.jsx"),
+    Component: lazy(() => import("./Metaverse.jsx")),
+    preload: () => import("./Metaverse.jsx"),
   },
   {
-    id: "creature-run",
-    name: "Creature Run",
+    id: "creature-quest",
+    name: "Creature Quest",
     navMode: "scroll",
     theme: { primary: "#33d6c0", bg: "#161226" },
     post: {
@@ -41,8 +41,8 @@ export const STORYLINES = [
       dof: { enabled: true, focalLength: 0.02, bokehScale: 3.0 },
       grade: { hue: -0.02, saturation: 0.18, brightness: -0.02, contrast: 0.12 },
     },
-    Component: lazy(() => import("./CreatureRun.jsx")),
-    preload: () => import("./CreatureRun.jsx"),
+    Component: lazy(() => import("./CreatureQuest.jsx")),
+    preload: () => import("./CreatureQuest.jsx"),
   },
 ];
 

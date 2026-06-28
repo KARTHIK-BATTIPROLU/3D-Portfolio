@@ -1,34 +1,33 @@
 // ============================================================================
-// CreatureRun — Storyline 2 (navMode: 'scroll').
+// CreatureQuest — Storyline 2 (navMode: 'scroll'), original-IP monster-battler.
 //
-// A rigged creature (CC0 Fox stand-in) runs a path mapped to scroll progress,
-// with a particle trail. Step 8: the same content is now told IN the world as
-// the runner passes through it — a start arch (intro), a creature market of
-// banners (skills), biome signposts (experience), project shrines with stone
-// tablets, a training ground (education) and a journey's-end board (contact).
-// Surfaces reveal as the runner reaches them; dense content opens a terminal.
+// Voltie (an original spark-fox, data/quest.js) hops onto the Trainer's
+// shoulder and the journey begins. Scroll carries them through biomes —
+// friendly encounters tell intro/about/skills/experience/education/contact —
+// and each PROJECT is a wild-encounter battle: pick a move (=a project,
+// original name) to beat a discipline opponent (=a skill domain). Farm India
+// is the boss; defeating it awards a badge. No Pokémon names/designs/assets
+// anywhere — see data/quest.js for the original naming layer.
 // ============================================================================
 
-import { Suspense, useMemo, useRef } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
 import * as THREE from "three";
 
 import { useStore } from "../store/useStore.js";
 import { BEATS } from "../data/beats.js";
 import { portfolio } from "../data/portfolio.js";
+import { CREATURE, TRAINER, BATTLES } from "../data/quest.js";
 import { prettyLabel } from "../components/BeatContent.jsx";
 import ModelBoundary from "../three/ModelBoundary.jsx";
-import FoxCreature from "../three/models/FoxCreature.jsx";
-import { setPlayerPos } from "../three/player.js";
+import CreatureMascot from "../three/models/CreatureMascot.jsx";
+import AvatarRPM from "../three/models/AvatarRPM.jsx";
+import BattleScene from "../three/BattleScene.jsx";
+import { playerPos, setPlayerPos } from "../three/player.js";
 import { setFocus } from "../three/cameraRig.js";
 import Particles from "../three/Particles.jsx";
-import {
-  Billboard,
-  Plaque,
-  Marker,
-  Inspectable,
-  InspectTerminal,
-} from "../three/Surfaces.jsx";
+import { Billboard, Plaque, Marker, Inspectable, InspectTerminal } from "../three/Surfaces.jsx";
 import { Guide, StoryNPC } from "../three/Story.jsx";
 
 // The run path (gentle S-curve heading into -Z).
@@ -59,7 +58,6 @@ const BEAT_COLORS = {
 const beatPoint = (i) => PATH.getPoint((i + 0.5) / N);
 const cleanDate = (v) => (!v || /confirm/i.test(v) ? "" : String(v).replace(/\/\/.*$/, "").trim());
 
-// point along the path with a sideways offset + vertical lift.
 const _tan = new THREE.Vector3();
 const _perp = new THREE.Vector3();
 function alongPath(t, side = 0, lift = 0) {
@@ -71,7 +69,7 @@ function alongPath(t, side = 0, lift = 0) {
 }
 
 // ----------------------------------------------------------------------------
-// Placeholder creature (fallback if the glTF fails) — the Step-3 blob.
+// Placeholder creature (fallback if the glTF fails) — Voltie's stand-in blob.
 // ----------------------------------------------------------------------------
 function PlaceholderCreature() {
   const bodyRef = useRef();
@@ -87,16 +85,16 @@ function PlaceholderCreature() {
     <group ref={bodyRef} position={[0, 0.65, 0]}>
       <mesh castShadow>
         <sphereGeometry args={[0.6, 28, 28]} />
-        <meshStandardMaterial color="#33d6c0" roughness={0.5} metalness={0.1} />
+        <meshStandardMaterial color={CREATURE.color} roughness={0.5} metalness={0.1} />
       </mesh>
       <mesh position={[0, -0.05, 0.42]}>
         <sphereGeometry args={[0.42, 20, 20]} />
-        <meshStandardMaterial color="#e9fffb" roughness={0.6} />
+        <meshStandardMaterial color="#fff6d6" roughness={0.6} />
       </mesh>
       {[-0.28, 0.28].map((x, i) => (
         <mesh key={i} position={[x, 0.62, 0]} rotation={[0, 0, x < 0 ? 0.3 : -0.3]} castShadow>
           <coneGeometry args={[0.13, 0.55, 14]} />
-          <meshStandardMaterial color="#2bbfaa" />
+          <meshStandardMaterial color="#d6a40f" />
         </mesh>
       ))}
       {[-0.2, 0.2].map((x, i) => (
@@ -109,12 +107,25 @@ function PlaceholderCreature() {
   );
 }
 
+function PlaceholderTrainer() {
+  return (
+    <mesh castShadow>
+      <capsuleGeometry args={[0.4, 1.0, 8, 16]} />
+      <meshStandardMaterial color={TRAINER.color} emissive={TRAINER.color} emissiveIntensity={0.2} metalness={0.4} roughness={0.5} />
+    </mesh>
+  );
+}
+
 // ----------------------------------------------------------------------------
 // The runner — places + faces along the path, drives the model's run/idle
-// state, shares its position (trail + in-world reveal).
+// state, shares its position (trail + in-world reveal). The Trainer walks a
+// half-step behind/beside; Voltie rides the shoulder until the first beat,
+// then leaps down and runs ahead for the rest of the journey.
 // ----------------------------------------------------------------------------
-function Creature({ posRef }) {
+function Travelers({ posRef }) {
   const rootRef = useRef();
+  const trainerRef = useRef();
+  const creatureGroupRef = useRef();
   const smooth = useRef(0);
   const stateRef = useRef("run");
   const { camera } = useThree();
@@ -122,7 +133,6 @@ function Creature({ posRef }) {
   const setBeat = useStore((s) => s.setBeat);
   const setFocusedProject = useStore((s) => s.setFocusedProject);
   const lastBeat = useRef(-1);
-  const lastFocus = useRef(-1);
 
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
@@ -137,6 +147,19 @@ function Creature({ posRef }) {
       rootRef.current.position.set(point.x, point.y, point.z);
       rootRef.current.rotation.y = Math.atan2(tangent.x, tangent.z);
     }
+
+    // Voltie: on the shoulder for the intro beat, running a stride ahead after.
+    const hoppedOff = p > 1 / N;
+    if (creatureGroupRef.current) {
+      if (hoppedOff) {
+        creatureGroupRef.current.position.set(1.1, 0, 1.6);
+        creatureGroupRef.current.rotation.y = 0;
+      } else {
+        creatureGroupRef.current.position.set(0.32, 1.0, -0.18); // perched on the shoulder
+        creatureGroupRef.current.rotation.y = Math.PI;
+      }
+    }
+    if (trainerRef.current) trainerRef.current.position.set(-0.25, 0, 0.15);
 
     if (posRef) posRef.current = point;
     setPlayerPos(point.x, point.y, point.z); // share with in-world surfaces
@@ -161,34 +184,32 @@ function Creature({ posRef }) {
     if (beatIndex !== lastBeat.current) {
       lastBeat.current = beatIndex;
       setBeat(beatId);
-      if (beatId !== "projects") {
-        lastFocus.current = -1;
-        setFocusedProject(null);
-      }
-    }
-    if (beatId === "projects") {
-      const sub = THREE.MathUtils.clamp((p - beatIndex / N) / (1 / N), 0, 0.999);
-      const idx = Math.floor(sub * portfolio.projects.length);
-      if (idx !== lastFocus.current) {
-        lastFocus.current = idx;
-        setFocusedProject(idx);
-      }
+      if (beatId !== "projects") setFocusedProject(null);
     }
   });
 
   return (
     <group ref={rootRef}>
-      <Suspense fallback={<PlaceholderCreature />}>
-        <ModelBoundary fallback={<PlaceholderCreature />}>
-          <FoxCreature stateRef={stateRef} />
-        </ModelBoundary>
-      </Suspense>
+      <group ref={trainerRef}>
+        <Suspense fallback={<PlaceholderTrainer />}>
+          <ModelBoundary fallback={<PlaceholderTrainer />}>
+            <AvatarRPM stateRef={stateRef} />
+          </ModelBoundary>
+        </Suspense>
+      </group>
+      <group ref={creatureGroupRef}>
+        <Suspense fallback={<PlaceholderCreature />}>
+          <ModelBoundary fallback={<PlaceholderCreature />}>
+            <CreatureMascot stateRef={stateRef} />
+          </ModelBoundary>
+        </Suspense>
+      </group>
     </group>
   );
 }
 
 // ----------------------------------------------------------------------------
-// Particle trail following the creature.
+// Particle trail following the travelers.
 // ----------------------------------------------------------------------------
 function Trail({ posRef }) {
   const COUNT = 48;
@@ -221,7 +242,7 @@ function Trail({ posRef }) {
       </bufferGeometry>
       <pointsMaterial
         size={0.28}
-        color="#ffd166"
+        color={CREATURE.color}
         transparent
         opacity={0.7}
         sizeAttenuation
@@ -282,13 +303,13 @@ function Gate({ position, color }) {
   );
 }
 
-// All the per-beat content surfaces (projects handled separately).
-function Encounters() {
+// All the per-beat content surfaces except projects (handled by BattleEncounters).
+function Encounters({ badges }) {
   const idx = (id) => BEATS.findIndex((b) => b.id === id);
 
   return (
     <>
-      {/* INTRO — start arch */}
+      {/* INTRO — start arch, the hop-on moment */}
       <group>
         <Gate position={[beatPoint(idx("intro")).x, 0, beatPoint(idx("intro")).z]} color={BEAT_COLORS.intro} />
         <mesh position={[0, 3, beatPoint(idx("intro")).z]} castShadow>
@@ -298,18 +319,18 @@ function Encounters() {
         <Billboard
           position={alongPath((idx("intro") + 0.5) / N, 0, 2.6)}
           width={5.4}
-          height={2.2}
+          height={2.4}
           color={BEAT_COLORS.intro}
           heading={portfolio.name}
-          headingSize={0.48}
-          lines={[portfolio.headline, `📍 ${portfolio.location}`]}
-          bodySize={0.24}
+          headingSize={0.44}
+          lines={[portfolio.headline, `${TRAINER.name} & ${CREATURE.name} — ${CREATURE.species}`]}
+          bodySize={0.22}
           near={8}
           far={20}
           faceCamera
         />
         <Marker position={alongPath((idx("intro") + 0.5) / N, 0, 5)} color={BEAT_COLORS.intro} size={0.6} near={20} far={46}>
-          START
+          {`${CREATURE.name} HOPS ON`}
         </Marker>
       </group>
 
@@ -361,7 +382,7 @@ function Encounters() {
         </Inspectable>
       </group>
 
-      {/* EXPERIENCE — biome signposts */}
+      {/* EXPERIENCE — chapters of the journey */}
       <group>
         <Gate position={[beatPoint(idx("experience")).x, 0, beatPoint(idx("experience")).z]} color={BEAT_COLORS.experience} />
         {portfolio.experience.map((e, j) => {
@@ -385,11 +406,11 @@ function Encounters() {
           );
         })}
         <Marker position={alongPath((idx("experience") + 0.5) / N, 0, 5)} color={BEAT_COLORS.experience} size={0.56} near={18} far={42}>
-          THE ROAD SO FAR
+          CHAPTERS SO FAR
         </Marker>
       </group>
 
-      {/* EDUCATION — training ground plaques */}
+      {/* EDUCATION — the academy */}
       <group>
         <Gate position={[beatPoint(idx("education")).x, 0, beatPoint(idx("education")).z]} color={BEAT_COLORS.education} />
         {portfolio.education.map((ed, j) => {
@@ -417,13 +438,26 @@ function Encounters() {
         </Marker>
       </group>
 
-      {/* CONTACT — journey's-end board */}
+      {/* CONTACT — the send-off, badges collected */}
       <group>
         <Gate position={[beatPoint(idx("contact")).x, 0, beatPoint(idx("contact")).z]} color={BEAT_COLORS.contact} />
         <mesh position={[0, 2.6, beatPoint(idx("contact")).z]}>
           <torusGeometry args={[1.8, 0.22, 18, 44]} />
           <meshStandardMaterial color={BEAT_COLORS.contact} emissive={BEAT_COLORS.contact} emissiveIntensity={1} />
         </mesh>
+        <Plaque
+          position={alongPath((idx("contact") + 0.5) / N, -3, 2.2)}
+          width={3.2}
+          height={2}
+          color="#ffd60a"
+          heading="Badges earned"
+          headingSize={0.22}
+          lines={badges.length ? badges : ["Battle through the build sites to earn one."]}
+          bodySize={0.18}
+          near={8}
+          far={18}
+          faceCamera
+        />
         <Inspectable id="contact" beat="contact" title="CONTACT · let's connect" range={7} offsetY={2.8}>
           <Billboard
             position={alongPath((idx("contact") + 0.5) / N, 0, 2.6)}
@@ -444,57 +478,112 @@ function Encounters() {
   );
 }
 
-// Projects = a row of "shrine" monoliths with stone-tablet descriptions.
-function ProjectShrines() {
-  const projectsIndex = BEATS.findIndex((b) => b.id === "projects");
-  const color = BEAT_COLORS.projects;
-  const count = portfolio.projects.length;
+// ----------------------------------------------------------------------------
+// BattleEncounters — projects = wild-encounter battles (3.3/3.4). A small
+// opponent creature stands at each spot; step close and a "⚔ Battle" chip
+// appears. Win → that project's content reveals + (if boss) a badge.
+// ----------------------------------------------------------------------------
+function OpponentModel({ color }) {
+  const ref = useRef();
+  useFrame((_, dt) => {
+    if (ref.current) ref.current.rotation.y += dt * 1.2;
+  });
+  return (
+    <group position={[0, 0.9, 0]}>
+      <mesh ref={ref} castShadow>
+        <octahedronGeometry args={[0.55, 0]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} flatShading />
+      </mesh>
+      <pointLight color={color} intensity={4} distance={5} />
+    </group>
+  );
+}
+
+// A battle's own proximity + "⚔ Battle (E)" chip — deliberately NOT using
+// <Inspectable>, whose E key is hardwired to the generic project terminal.
+// Pressing E here must open the actual turn-based BattleScene instead.
+const _bp = new THREE.Vector3();
+function BattleSpot({ battle, isDefeated, isOpen, onOpen, onClose }) {
+  const ref = useRef();
+  const nearRef = useRef(false);
+  const [showChip, setShowChip] = useState(false);
+
+  useFrame(() => {
+    const g = ref.current;
+    if (!g) return;
+    g.getWorldPosition(_bp);
+    const now = playerPos.distanceTo(_bp) < 5.5;
+    nearRef.current = now;
+    const want = now && !isDefeated;
+    setShowChip((prev) => (prev === want ? prev : want));
+  });
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "e" && e.key !== "E") return;
+      if (!nearRef.current || isDefeated) return;
+      if (isOpen) onClose();
+      else onOpen();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, isDefeated, onOpen, onClose]);
+
+  return (
+    <group ref={ref}>
+      <OpponentModel color={isDefeated ? "#4a4a55" : battle.opponent.color} />
+      <Marker position={[0, 1.9, 0]} color={battle.opponent.color} size={0.32} near={9} far={20}>
+        {isDefeated ? `${battle.project.name}\n✓ defeated` : `${battle.opponent.name}\n⚔ press E to battle`}
+      </Marker>
+      {showChip && !isOpen && (
+        <Html position={[0, 1.9, 0]} center distanceFactor={11} style={{ pointerEvents: "auto" }} zIndexRange={[18, 0]}>
+          <button className="inspect-chip" onClick={(e) => { e.stopPropagation(); onOpen(); }}>
+            ⚔ Battle <kbd>E</kbd>
+          </button>
+        </Html>
+      )}
+    </group>
+  );
+}
+
+function BattleEncounters({ defeated, onWin, openId, setOpenId }) {
+  const projectsIdx = BEATS.findIndex((b) => b.id === "projects");
+  const count = BATTLES.length;
 
   return (
     <>
-      {portfolio.projects.map((proj, j) => {
-        const t = (projectsIndex + (j + 0.5) / count) / N;
+      {BATTLES.map((battle, j) => {
+        const t = (projectsIdx + (j + 0.5) / count) / N;
         const side = j % 2 === 0 ? 1 : -1;
         const pos = alongPath(t, 3 * side, 0);
-        const h = 2.5 + j * 0.6;
+        const isDefeated = defeated.has(battle.id);
+        const isOpen = openId === battle.id;
 
         return (
-          <group key={proj.name} position={pos}>
-            {/* monolith */}
-            <mesh position={[0, h / 2, 0]} castShadow>
-              <boxGeometry args={[1.6, h, 1.6]} />
-              <meshStandardMaterial
-                color={proj.flagship ? "#ff5d8f" : color}
-                emissive={proj.flagship ? "#ff5d8f" : color}
-                emissiveIntensity={0.3}
-                metalness={0.5}
-                roughness={0.35}
+          <group key={battle.id} position={pos}>
+            <BattleSpot
+              battle={battle}
+              isDefeated={isDefeated}
+              isOpen={isOpen}
+              onOpen={() => setOpenId(battle.id)}
+              onClose={() => setOpenId(null)}
+            />
+            {isOpen && (
+              <BattleScene
+                battle={battle}
+                unlockedMoves={BATTLES.filter((b) => defeated.has(b.id)).map((b) => b.move)}
+                anchor={[0, 2.4, 0]}
+                onWin={() => {
+                  onWin(battle);
+                  setOpenId(null);
+                }}
+                onClose={() => setOpenId(null)}
               />
-            </mesh>
-            <mesh position={[0, h + 0.4, 0]}>
-              <icosahedronGeometry args={[0.45, 0]} />
-              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1} flatShading />
-            </mesh>
-            {/* stone tablet description */}
-            <Inspectable id={`proj-${j}`} beat="projects" title={`PROJECT · ${proj.name}`} range={6} offsetY={h + 1}>
-              <Plaque
-                position={[0, h / 2, 1.2]}
-                width={3.2}
-                height={2.2}
-                color={proj.flagship ? "#ff5d8f" : color}
-                heading={`${proj.flagship ? "★ " : ""}${proj.name}`}
-                headingSize={0.24}
-                lines={[proj.blurb.length > 140 ? proj.blurb.slice(0, 137) + "…" : proj.blurb, "", proj.status]}
-                bodySize={0.17}
-                near={6}
-                far={14}
-                faceCamera
-              />
-            </Inspectable>
+            )}
           </group>
         );
       })}
-      <Marker position={alongPath((projectsIndex + 0.5) / N, 0, 6)} color={color} size={0.6} near={20} far={48}>
+      <Marker position={alongPath((projectsIdx + 0.5) / N, 0, 6)} color={BEAT_COLORS.projects} size={0.6} near={20} far={48}>
         THE BUILD SITES
       </Marker>
     </>
@@ -531,10 +620,23 @@ function Scenery() {
 }
 
 // ============================================================================
-// CreatureRun root
+// CreatureQuest root
 // ============================================================================
-export default function CreatureRun() {
+export default function CreatureQuest() {
   const posRef = useRef(null);
+  const [defeated, setDefeated] = useState(() => new Set());
+  const [openId, setOpenId] = useState(null);
+  const setFocusedProject = useStore((s) => s.setFocusedProject);
+
+  const badges = useMemo(
+    () => BATTLES.filter((b) => defeated.has(b.id) && b.badge).map((b) => `🏅 ${b.badge} — ${b.project.name}`),
+    [defeated]
+  );
+
+  function handleWin(battle) {
+    setDefeated((prev) => new Set(prev).add(battle.id));
+    setFocusedProject(BATTLES.findIndex((b) => b.id === battle.id));
+  }
 
   return (
     <group>
@@ -555,9 +657,9 @@ export default function CreatureRun() {
 
       <Track />
       <Scenery />
-      <Encounters />
-      <ProjectShrines />
-      <Creature posRef={posRef} />
+      <Encounters badges={badges} />
+      <BattleEncounters defeated={defeated} onWin={handleWin} openId={openId} setOpenId={setOpenId} />
+      <Travelers posRef={posRef} />
       <Trail posRef={posRef} />
 
       {/* story layer — a local NPC beside the path at each beat + the guide */}

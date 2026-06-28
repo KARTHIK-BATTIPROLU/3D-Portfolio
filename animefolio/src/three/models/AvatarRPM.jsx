@@ -1,7 +1,8 @@
 // ============================================================================
-// FoxCreature — Creature Run runner (CC0 stand-in: Khronos Fox).
-// Blends Survey (idle) / Run based on `stateRef`. Swap the model URL + CLIP
-// names to drop in your final original creature later.
+// AvatarRPM — Karthik's avatar (the "Trainer" in Creature Quest, the roaming
+// character in Metaverse). CC0 stand-in: three.js RobotExpressive. Swap for a
+// Ready Player Me export later — see data/assets.js + HUMAN_TODO.md.
+// Blends Idle / Walking / Running based on the `stateRef` the controller sets.
 // ============================================================================
 
 import { useEffect, useRef } from "react";
@@ -9,30 +10,33 @@ import { useGLTF, useAnimations } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { assets, DRACO_PATH } from "../../data/assets.js";
 
-const URL = assets.modelFox.path;
-const CLIP = { idle: "Survey", walk: "Walk", run: "Run" };
+const URL = assets.modelRobot.path;
+const CLIP = { idle: "Idle", walk: "Walking", run: "Running" };
 
-export default function FoxCreature({ stateRef }) {
+export default function AvatarRPM({ stateRef }) {
   const group = useRef();
   const { scene, animations } = useGLTF(URL, DRACO_PATH);
   const { actions, names } = useAnimations(animations, group);
   const currentName = useRef(null);
 
+  // Shadows on the imported meshes.
   useEffect(() => {
     scene.traverse((o) => {
       if (o.isMesh) o.castShadow = true;
     });
   }, [scene]);
 
+  // Start in idle (fall back to the first available clip).
   useEffect(() => {
-    const start = actions[CLIP.run] ? CLIP.run : names[0];
+    const start = actions[CLIP.idle] ? CLIP.idle : names[0];
     actions[start]?.reset().fadeIn(0.3).play();
     currentName.current = start;
     return () => Object.values(actions).forEach((a) => a?.stop());
   }, [actions, names]);
 
+  // Crossfade to the clip for the current movement state.
   useFrame(() => {
-    const state = stateRef?.current || "run";
+    const state = stateRef?.current || "idle";
     const want = actions[CLIP[state]] ? CLIP[state] : names[0];
     if (!want || want === currentName.current) return;
     actions[want]?.reset().fadeIn(0.25).play();
@@ -40,9 +44,9 @@ export default function FoxCreature({ stateRef }) {
     currentName.current = want;
   });
 
-  // Fox is modelled large and faces +Z; scale/rotation may need a tweak.
+  // scale / rotation are the two values most likely to need a tweak.
   return (
-    <group ref={group} scale={0.025} rotation={[0, 0, 0]}>
+    <group ref={group} position={[0, -0.9, 0]} scale={0.45} rotation={[0, 0, 0]}>
       <primitive object={scene} />
     </group>
   );

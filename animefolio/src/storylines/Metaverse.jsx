@@ -1,78 +1,70 @@
 // ============================================================================
-// HubWorld — Storyline 1 (navMode: 'free-roam').
-//
-// A walkable hub: a kinematic capsule avatar (Rapier character controller) you
-// steer with click-to-move OR WASD, with a damped third-person camera. Seven
-// landmark zones map to content beats via proximity.
-//
-// Step 8: the floating cards are gone — every portfolio detail now lives IN the
-// world on believable surfaces (welcome arch, skills street, tower rooms,
-// trackside billboards, academy plaques, trophy plinth, contact kiosk) and
-// reveals as you approach. Dense content opens a diegetic inspect terminal.
+// Metaverse — Storyline 1 (navMode: 'free-roam'), the open-world rebuild
+// (Phase 2). First contact: a podium reveal under drifting clouds ("scroll to
+// begin"). The clouds part, the camera descends into a walkable grassland —
+// central podium + world-map plaque, four zones (Left: Eiffel Tower +
+// Racetrack · Right: Roller Coaster + Circus Tent), the remaining beats
+// (skills/education/contact/achievements) as world features. Diegetic
+// proximity reveals throughout; a kinematic Rapier character controller
+// (click-to-move + WASD + joystick) drives the avatar.
 // ============================================================================
 
-import { Suspense, useEffect, useMemo, useRef } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
-import {
-  Physics,
-  RigidBody,
-  CapsuleCollider,
-  CuboidCollider,
-} from "@react-three/rapier";
-import { useRapier } from "@react-three/rapier";
-import { Environment, Instances, Instance } from "@react-three/drei";
+import { Physics, RigidBody, CapsuleCollider, CuboidCollider, useRapier } from "@react-three/rapier";
+import { Environment, Instances, Instance, Sky, Cloud, Html } from "@react-three/drei";
 import * as THREE from "three";
+import gsap from "gsap";
 
 import { useStore } from "../store/useStore.js";
 import { portfolio } from "../data/portfolio.js";
 import { prettyLabel } from "../components/BeatContent.jsx";
 import ModelBoundary from "../three/ModelBoundary.jsx";
-import RobotAvatar from "../three/models/RobotAvatar.jsx";
+import AvatarRPM from "../three/models/AvatarRPM.jsx";
 import { touchInput } from "../three/input.js";
 import { setPlayerPos } from "../three/player.js";
 import { setFocus } from "../three/cameraRig.js";
+import { rideLock } from "../three/rideLock.js";
 import Particles from "../three/Particles.jsx";
 import { EnergyMat } from "../three/shaders/EnergyMaterial.jsx";
-import {
-  Billboard,
-  Plaque,
-  Marker,
-  Inspectable,
-  InspectTerminal,
-} from "../three/Surfaces.jsx";
+import { Billboard, Plaque, Marker, Inspectable, InspectTerminal } from "../three/Surfaces.jsx";
 import { Guide, StoryNPC } from "../three/Story.jsx";
+
+import EiffelLift, { EIFFEL_POS, LIFT_RADIUS, GROUND_Y, LIFT_TOP_Y, LIFT_SPEED } from "../three/zones/EiffelLift.jsx";
+import RollerCoaster, { COASTER_POS } from "../three/zones/RollerCoaster.jsx";
+import CircusTent, { CIRCUS_POS } from "../three/zones/CircusTent.jsx";
+import Racetrack, { RACETRACK_POS } from "../three/zones/Racetrack.jsx";
+
+const prefersReducedMotion =
+  typeof window !== "undefined" &&
+  window.matchMedia &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // Where each beat's local NPC stands (near its landmark).
 const NPC_SPOTS = {
   intro: [2.6, 0, 3.5],
   about: [11, 0, 5.5],
-  skills: [-18, 0, 22],
-  experience: [16, 0, -12],
-  projects: [-14, 0, -14],
-  education: [16, 0, 15],
-  contact: [3, 0, 27],
+  skills: [-14, 0, 24],
+  experience: [COASTER_POS.x - 5, 0, COASTER_POS.z + 5],
+  projects: [EIFFEL_POS.x + 3, 0, EIFFEL_POS.z + 5],
+  education: [14, 0, 26],
+  contact: [3, 0, 40],
 };
 
-// --- world layout -----------------------------------------------------------
-const TOWER = { x: -18, z: -18 };
-const LIFT_RADIUS = 3;
-const GROUND_Y = 0.9; // avatar capsule resting centre height
-const LIFT_TOP_Y = GROUND_Y + 8;
-const LIFT_SPEED = 4;
-
 const LANDMARKS = [
-  { id: "plaza",   beat: "intro",      label: "Plaza · Intro",        pos: [0, 0, 4],     radius: 5, color: "#00d4ff" },
-  { id: "statue",  beat: "about",      label: "Statue · About",       pos: [9, 0, 6],     radius: 4, color: "#9d4edd" },
-  { id: "tower",   beat: "projects",   label: "Tower · Projects",     pos: [TOWER.x, 0, TOWER.z], radius: 8, color: "#ff8c42" },
-  { id: "coaster", beat: "experience", label: "Coaster · Experience", pos: [20, 0, -16],  radius: 7, color: "#ff006e" },
-  { id: "street",  beat: "skills",     label: "Street · Skills",      pos: [-20, 0, 16],  radius: 7, color: "#06d6a0" },
-  { id: "academy", beat: "education",  label: "Academy · Education",  pos: [20, 0, 18],   radius: 6, color: "#ffd60a" },
-  { id: "portal",  beat: "contact",    label: "Portal · Contact",     pos: [0, 0, 30],    radius: 5, color: "#06ffa5" },
+  { id: "plaza",     beat: "intro",      label: "Plaza · Intro",                pos: [0, 0, 4],                              radius: 5 },
+  { id: "statue",    beat: "about",      label: "Statue · About",               pos: [9, 0, 6],                              radius: 4 },
+  { id: "eiffel",    beat: "projects",   label: "Eiffel Lift · Projects",       pos: [EIFFEL_POS.x, 0, EIFFEL_POS.z],        radius: 8 },
+  { id: "coaster",   beat: "experience", label: "Roller Coaster · Experience",  pos: [COASTER_POS.x, 0, COASTER_POS.z],      radius: 8 },
+  { id: "circus",    beat: "projects",   label: "Circus Tent · Projects",       pos: [CIRCUS_POS.x, 0, CIRCUS_POS.z],        radius: 9 },
+  { id: "racetrack", beat: "projects",   label: "Racetrack · Projects",         pos: [RACETRACK_POS.x, 0, RACETRACK_POS.z],  radius: 12 },
+  { id: "street",    beat: "skills",     label: "Skills Street",                pos: [-14, 0, 28],                           radius: 7 },
+  { id: "academy",   beat: "education",  label: "Academy · Education",          pos: [14, 0, 30],                            radius: 6 },
+  { id: "portal",    beat: "contact",    label: "Portal · Contact",             pos: [0, 0, 40],                             radius: 5 },
 ];
 
 const cleanDate = (v) => (!v || /confirm/i.test(v) ? "" : String(v).replace(/\/\/.*$/, "").trim());
 
-// Placeholder avatar (fallback if the glTF fails to load).
 function PlaceholderAvatar() {
   return (
     <>
@@ -89,9 +81,108 @@ function PlaceholderAvatar() {
 }
 
 // ============================================================================
+// First contact — podium + rotating avatar under a drifting sky, "scroll to
+// begin." First wheel/touch gesture triggers the cloud-part camera descent
+// (Phase 2.1/2.2), then hands control to the free-roam Avatar below.
+// ============================================================================
+function CloudIntro({ onDone }) {
+  const { camera } = useThree();
+  const groupRef = useRef();
+  // Refs, not state: the trigger must attach exactly once on mount and stay
+  // attached for the component's whole life — re-render churn (parent state,
+  // PerformanceMonitor, etc.) must never tear down/rebuild this listener.
+  const startedRef = useRef(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
+  useEffect(() => {
+    camera.position.set(0, 2.4, 6.5);
+    camera.lookAt(0, 1.6, 0);
+  }, [camera]);
+
+  useFrame((_, dt) => {
+    if (groupRef.current) groupRef.current.rotation.y += dt * 0.5;
+  });
+
+  // Plain function (not effect-scoped) so the fallback "Enter the world"
+  // button below can call the exact same path as the scroll/key gesture.
+  const begin = () => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    gsap.to(camera.position, {
+      x: 0,
+      y: 16,
+      z: 30,
+      duration: 2.6,
+      ease: "power2.inOut",
+      onUpdate: () => camera.lookAt(0, 1, 4),
+    });
+    gsap.to(camera, {
+      fov: 58,
+      duration: 2.6,
+      ease: "power2.inOut",
+      onUpdate: () => camera.updateProjectionMatrix(),
+      onComplete: () => onDoneRef.current(),
+    });
+  };
+
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      onDoneRef.current();
+      return;
+    }
+    window.addEventListener("wheel", begin, { passive: true });
+    window.addEventListener("touchmove", begin, { passive: true });
+    window.addEventListener("keydown", begin);
+    return () => {
+      window.removeEventListener("wheel", begin);
+      window.removeEventListener("touchmove", begin);
+      window.removeEventListener("keydown", begin);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [camera]);
+
+  return (
+    <>
+      <Sky distance={4500} sunPosition={[10, 4, -20]} turbidity={6} rayleigh={1.5} />
+      {!prefersReducedMotion && (
+        <>
+          <Cloud position={[-6, 5, -4]} speed={0.2} opacity={0.7} />
+          <Cloud position={[5, 4, -2]} speed={0.25} opacity={0.6} />
+          <Cloud position={[0, 6, -8]} speed={0.15} opacity={0.5} />
+        </>
+      )}
+      <group ref={groupRef} position={[0, 0.2, 0]}>
+        <mesh position={[0, -0.05, 0]} receiveShadow>
+          <cylinderGeometry args={[1.4, 1.6, 0.5, 32]} />
+          <meshStandardMaterial color="#cfd6e6" metalness={0.3} roughness={0.5} />
+        </mesh>
+        <Suspense fallback={<PlaceholderAvatar />}>
+          <ModelBoundary fallback={<PlaceholderAvatar />}>
+            <group position={[0, 0.3, 0]}>
+              <AvatarRPM stateRef={{ current: "idle" }} />
+            </group>
+          </ModelBoundary>
+        </Suspense>
+      </group>
+      <Html center position={[0, 3.4, 0]} style={{ pointerEvents: "none" }}>
+        <div className="label-3d" style={{ fontSize: "0.85rem", letterSpacing: "0.18em" }}>
+          {portfolio.name.toUpperCase()} ↓ scroll to begin
+        </div>
+      </Html>
+      <Html center position={[0, 0.55, 1.8]} style={{ pointerEvents: "auto" }}>
+        <button className="ui-btn primary" onClick={begin}>
+          Enter the world →
+        </button>
+      </Html>
+    </>
+  );
+}
+
+// ============================================================================
 // Avatar + controller — the only piece that touches Rapier internals.
 // ============================================================================
-function Avatar({ moveTargetRef }) {
+function Avatar({ moveTargetRef, controlsEnabled }) {
   const bodyRef = useRef();
   const meshRef = useRef();
   const { world } = useRapier();
@@ -107,7 +198,6 @@ function Avatar({ moveTargetRef }) {
   const setBeat = useStore((s) => s.setBeat);
   const setFocusedProject = useStore((s) => s.setFocusedProject);
 
-  // Create the Rapier kinematic character controller once.
   useEffect(() => {
     const c = world.createCharacterController(0.01);
     c.enableAutostep(0.5, 0.2, true);
@@ -121,7 +211,6 @@ function Avatar({ moveTargetRef }) {
     };
   }, [world]);
 
-  // Keyboard (WASD / arrows). Cleaned up on unmount → no stuck input on switch.
   useEffect(() => {
     const down = (e) => (keys.current[e.code] = true);
     const up = (e) => (keys.current[e.code] = false);
@@ -139,38 +228,46 @@ function Avatar({ moveTargetRef }) {
     if (!body || !controller) return;
     const collider = body.collider(0);
     if (!collider) return;
-
     const dt = Math.min(rawDt, 0.05);
+
+    // A ride zone (coaster/racetrack) owns the camera + drives reveals itself.
+    if (rideLock.active) return;
+
+    // A ride just ended — snap back to solid ground.
+    if (rideLock.teleportTo) {
+      body.setNextKinematicTranslation(rideLock.teleportTo);
+      rideLock.teleportTo = null;
+      return;
+    }
+
+    if (!controlsEnabled) return;
+
     const speed = 6;
     const pos = body.translation();
     const k = keys.current;
 
-    // Lift detection (Tower → layer-by-layer projects).
-    const distToTower = Math.hypot(pos.x - TOWER.x, pos.z - TOWER.z);
+    // Eiffel lift detection.
+    const distToEiffel = Math.hypot(pos.x - EIFFEL_POS.x, pos.z - EIFFEL_POS.z);
     const vUp =
       (k.KeyW || k.ArrowUp ? 1 : 0) -
       (k.KeyS || k.ArrowDown ? 1 : 0) +
       (touchInput.y < -0.4 ? 1 : touchInput.y > 0.4 ? -1 : 0);
-    const inLift = distToTower < LIFT_RADIUS && (vUp !== 0 || pos.y > GROUND_Y + 0.15);
+    const inLift = distToEiffel < LIFT_RADIUS && (vUp !== 0 || pos.y > GROUND_Y + 0.15);
 
     let next;
     if (inLift) {
-      // Ride the lift: lock to the column, drive Y by W/S.
       next = {
-        x: THREE.MathUtils.lerp(pos.x, TOWER.x, Math.min(1, dt * 5)),
+        x: THREE.MathUtils.lerp(pos.x, EIFFEL_POS.x, Math.min(1, dt * 5)),
         y: THREE.MathUtils.clamp(pos.y + vUp * LIFT_SPEED * dt, GROUND_Y, LIFT_TOP_Y),
-        z: THREE.MathUtils.lerp(pos.z, TOWER.z, Math.min(1, dt * 5)),
+        z: THREE.MathUtils.lerp(pos.z, EIFFEL_POS.z, Math.min(1, dt * 5)),
       };
       velocityY.current = 0;
     } else {
-      // Camera-relative movement basis (horizontal only).
       const camForward = new THREE.Vector3();
       camera.getWorldDirection(camForward);
       camForward.y = 0;
       camForward.normalize();
-      const camRight = new THREE.Vector3()
-        .crossVectors(camForward, new THREE.Vector3(0, 1, 0))
-        .normalize();
+      const camRight = new THREE.Vector3().crossVectors(camForward, new THREE.Vector3(0, 1, 0)).normalize();
 
       const input = new THREE.Vector3();
       let usingKeys = false;
@@ -178,7 +275,6 @@ function Avatar({ moveTargetRef }) {
       if (k.KeyS || k.ArrowDown) { input.sub(camForward); usingKeys = true; }
       if (k.KeyD || k.ArrowRight) { input.add(camRight); usingKeys = true; }
       if (k.KeyA || k.ArrowLeft) { input.sub(camRight); usingKeys = true; }
-      // touch joystick (mobile)
       if (Math.hypot(touchInput.x, touchInput.y) > 0.12) {
         input.add(camForward.clone().multiplyScalar(-touchInput.y));
         input.add(camRight.clone().multiplyScalar(touchInput.x));
@@ -191,17 +287,12 @@ function Avatar({ moveTargetRef }) {
         input.normalize().multiplyScalar(speed * dt);
         horiz.copy(input);
       } else if (moveTargetRef.current) {
-        const to = new THREE.Vector3(
-          moveTargetRef.current.x - pos.x,
-          0,
-          moveTargetRef.current.z - pos.z
-        );
+        const to = new THREE.Vector3(moveTargetRef.current.x - pos.x, 0, moveTargetRef.current.z - pos.z);
         const dist = to.length();
         if (dist < 0.3) moveTargetRef.current = null;
         else horiz.copy(to.normalize().multiplyScalar(Math.min(speed * dt, dist)));
       }
 
-      // Gravity via the controller.
       velocityY.current -= 20 * dt;
       const desired = { x: horiz.x, y: velocityY.current * dt, z: horiz.z };
       controller.computeColliderMovement(collider, desired);
@@ -211,21 +302,13 @@ function Avatar({ moveTargetRef }) {
     }
 
     body.setNextKinematicTranslation(next);
-    setPlayerPos(next.x, next.y, next.z); // share with in-world surfaces
-    setFocus(next.x, next.y + 1.2, next.z); // depth-of-field tracks the avatar
+    setPlayerPos(next.x, next.y, next.z);
+    setFocus(next.x, next.y + 1.2, next.z);
 
-    // Animation state from horizontal speed.
     const stepDist = Math.hypot(next.x - pos.x, next.z - pos.z);
     const speedPerSec = stepDist / dt;
-    stateRef.current = inLift
-      ? "idle"
-      : speedPerSec < 0.4
-      ? "idle"
-      : speedPerSec < 3.2
-      ? "walk"
-      : "run";
+    stateRef.current = inLift ? "idle" : speedPerSec < 0.4 ? "idle" : speedPerSec < 3.2 ? "walk" : "run";
 
-    // Face the movement direction.
     const moveX = next.x - pos.x;
     const moveZ = next.z - pos.z;
     if (meshRef.current && moveX * moveX + moveZ * moveZ > 1e-5) {
@@ -235,15 +318,10 @@ function Avatar({ moveTargetRef }) {
       meshRef.current.rotation.y += diff * Math.min(1, dt * 10);
     }
 
-    // Damped follow camera (frame-rate independent).
     const damp = 1 - Math.pow(0.0015, dt);
-    camera.position.lerp(
-      new THREE.Vector3(next.x, next.y + 9, next.z + 14),
-      damp
-    );
+    camera.position.lerp(new THREE.Vector3(next.x, next.y + 9, next.z + 14), damp);
     camera.lookAt(next.x, next.y + 1.2, next.z);
 
-    // Proximity → content beat.
     let zone = null;
     for (const lm of LANDMARKS) {
       if (Math.hypot(next.x - lm.pos[0], next.z - lm.pos[2]) < lm.radius) {
@@ -261,13 +339,8 @@ function Avatar({ moveTargetRef }) {
       }
     }
 
-    // Tower ascent → focused project (only fire on change).
-    if (zone && zone.beat === "projects") {
-      const idx = THREE.MathUtils.clamp(
-        Math.floor((next.y - GROUND_Y) / 2),
-        0,
-        portfolio.projects.length - 1
-      );
+    if (zone && zone.id === "eiffel") {
+      const idx = THREE.MathUtils.clamp(Math.floor((next.y - GROUND_Y) / 2), 0, portfolio.projects.length - 1);
       if (idx !== lastFocused.current) {
         lastFocused.current = idx;
         setFocusedProject(idx);
@@ -276,17 +349,12 @@ function Avatar({ moveTargetRef }) {
   });
 
   return (
-    <RigidBody
-      ref={bodyRef}
-      type="kinematicPosition"
-      colliders={false}
-      position={[0, GROUND_Y, 8]}
-    >
+    <RigidBody ref={bodyRef} type="kinematicPosition" colliders={false} position={[0, GROUND_Y, 8]}>
       <CapsuleCollider args={[0.5, 0.4]} />
       <group ref={meshRef}>
         <Suspense fallback={<PlaceholderAvatar />}>
           <ModelBoundary fallback={<PlaceholderAvatar />}>
-            <RobotAvatar stateRef={stateRef} />
+            <AvatarRPM stateRef={stateRef} />
           </ModelBoundary>
         </Suspense>
       </group>
@@ -295,10 +363,9 @@ function Avatar({ moveTargetRef }) {
 }
 
 // ============================================================================
-// Static set-pieces.
+// Static set-pieces (Ground, Plaza, Trophy, SkillsStreet, Academy, Portal,
+// the world-map plaque) — unchanged in spirit from the prior Hub World.
 // ============================================================================
-// A soft warm→dark radial gradient, baked once into a CanvasTexture. Gives the
-// floor a "pool of light fading into atmosphere" read instead of a flat grey box.
 function useGroundTexture() {
   return useMemo(() => {
     const s = 512;
@@ -306,9 +373,9 @@ function useGroundTexture() {
     cnv.width = cnv.height = s;
     const ctx = cnv.getContext("2d");
     const g = ctx.createRadialGradient(s / 2, s / 2, s * 0.04, s / 2, s / 2, s * 0.5);
-    g.addColorStop(0, "#5a4148"); // warm, lit centre (matches the sunset HDRI)
+    g.addColorStop(0, "#5a4148");
     g.addColorStop(0.45, "#33272f");
-    g.addColorStop(1, "#1a141f"); // darker, hazier edges
+    g.addColorStop(1, "#1a141f");
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, s, s);
     const tex = new THREE.CanvasTexture(cnv);
@@ -321,7 +388,7 @@ function Ground({ moveTargetRef }) {
   const tex = useGroundTexture();
   return (
     <RigidBody type="fixed" colliders={false}>
-      <CuboidCollider args={[60, 0.5, 60]} position={[0, -0.5, 0]} />
+      <CuboidCollider args={[80, 0.5, 80]} position={[0, -0.5, 0]} />
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
         receiveShadow
@@ -330,220 +397,18 @@ function Ground({ moveTargetRef }) {
           moveTargetRef.current = e.point.clone();
         }}
       >
-        <planeGeometry args={[140, 140]} />
+        <planeGeometry args={[180, 180]} />
         <meshStandardMaterial map={tex} roughness={0.9} metalness={0.05} />
       </mesh>
     </RigidBody>
   );
 }
 
-// A steel beam (cylinder) oriented between two points — builds lattice towers.
-function Beam({ from, to, radius = 0.08, color = "#d98a4f" }) {
-  const a = new THREE.Vector3(...from);
-  const b = new THREE.Vector3(...to);
-  const mid = a.clone().add(b).multiplyScalar(0.5);
-  const dir = b.clone().sub(a);
-  const len = dir.length();
-  const quat = new THREE.Quaternion().setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    dir.normalize()
-  );
-  return (
-    <mesh position={[mid.x, mid.y, mid.z]} quaternion={quat} castShadow>
-      <cylinderGeometry args={[radius, radius, len, 8]} />
-      <meshStandardMaterial color={color} metalness={0.6} roughness={0.4} />
-    </mesh>
-  );
-}
-
-// Tower = projects. Lattice structure + a stacked "room" per project (title in
-// big letters, blurb on a wall screen, tech as glowing chips). The lift reveals
-// one floor at a time as the avatar ascends.
-function Tower() {
-  const C = "#ff8c42";
-  const levels = [
-    { y: 0, s: 2.6 },
-    { y: 4, s: 1.7 },
-    { y: 8, s: 1.0 },
-    { y: 11, s: 0.5 },
-  ];
-  const corners = (s) => [
-    [-s, s],
-    [s, s],
-    [s, -s],
-    [-s, -s],
-  ];
-  const legs = [];
-  const braces = [];
-  for (let i = 0; i < levels.length - 1; i++) {
-    const a = levels[i];
-    const b = levels[i + 1];
-    const ca = corners(a.s);
-    const cb = corners(b.s);
-    for (let k = 0; k < 4; k++) {
-      legs.push([[ca[k][0], a.y, ca[k][1]], [cb[k][0], b.y, cb[k][1]]]);
-      const k2 = (k + 1) % 4;
-      braces.push([[ca[k][0], a.y, ca[k][1]], [cb[k2][0], b.y, cb[k2][1]]]);
-      braces.push([[ca[k2][0], a.y, ca[k2][1]], [cb[k][0], b.y, cb[k][1]]]);
-    }
-  }
-
-  return (
-    <group position={[TOWER.x, 0, TOWER.z]}>
-      {legs.map((l, i) => (
-        <Beam key={`leg${i}`} from={l[0]} to={l[1]} radius={0.14} color="#d98a4f" />
-      ))}
-      {braces.map((l, i) => (
-        <Beam key={`br${i}`} from={l[0]} to={l[1]} radius={0.05} color="#d98a4f" />
-      ))}
-      {levels.slice(0, 3).map((lv, i) => (
-        <mesh key={i} position={[0, lv.y, 0]} castShadow receiveShadow>
-          <boxGeometry args={[lv.s * 2 + 0.6, 0.18, lv.s * 2 + 0.6]} />
-          <meshStandardMaterial color="#d98a4f" metalness={0.6} roughness={0.4} />
-        </mesh>
-      ))}
-      <mesh position={[0, 12.2, 0]} castShadow>
-        <coneGeometry args={[0.34, 2.4, 12]} />
-        <meshStandardMaterial color="#ffb066" emissive="#ff8c42" emissiveIntensity={0.5} />
-      </mesh>
-      <mesh position={[0, 13.6, 0]}>
-        <sphereGeometry args={[0.18, 12, 12]} />
-        <meshStandardMaterial color="#ffd166" emissive="#ffd166" emissiveIntensity={1.4} />
-      </mesh>
-
-      {/* lift pad */}
-      <mesh position={[0, 0.05, 0]} receiveShadow>
-        <cylinderGeometry args={[LIFT_RADIUS - 0.4, LIFT_RADIUS - 0.4, 0.1, 32]} />
-        <meshStandardMaterial color="#ff8c42" emissive="#ff8c42" emissiveIntensity={0.6} transparent opacity={0.5} />
-      </mesh>
-
-      {/* per-project ROOMS — title + blurb + tech, revealed as the lift rises */}
-      {portfolio.projects.map((p, i) => {
-        const y = GROUND_Y + i * 2;
-        return (
-          <group key={p.name} position={[0, y, 0]}>
-            {/* floor disc for the room */}
-            <mesh position={[2.4, -0.45, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-              <ringGeometry args={[0.4, 2.2, 32]} />
-              <meshStandardMaterial color="#ff8c42" emissive="#ff8c42" emissiveIntensity={0.3} transparent opacity={0.25} side={THREE.DoubleSide} />
-            </mesh>
-            <Inspectable id={`proj-${i}`} beat="projects" title={`PROJECT · ${p.name}`} range={4} offsetY={1.7}>
-              <Billboard
-                position={[2.4, 0.4, 0]}
-                width={4.6}
-                height={2.6}
-                color={p.flagship ? "#ff5d8f" : C}
-                heading={`${i + 1}. ${p.name}${p.flagship ? "  ★" : ""}`}
-                headingSize={0.42}
-                lines={[p.blurb.length > 150 ? p.blurb.slice(0, 147) + "…" : p.blurb, "", p.status]}
-                bodySize={0.21}
-                chips={p.tech}
-                near={2.6}
-                far={3.8}
-                faceCamera
-              />
-            </Inspectable>
-          </group>
-        );
-      })}
-
-      <Marker position={[0, 11, 0]} color="#ff8c42" size={0.62} near={11} far={26}>
-        {"PROJECTS\nride the lift (W/S)"}
-      </Marker>
-    </group>
-  );
-}
-
-const COASTER_CURVE = new THREE.CatmullRomCurve3(
-  [
-    [0, 2, 6],
-    [5, 5, 2],
-    [2, 1.5, -4],
-    [-4, 4, -6],
-    [-6, 2, 0],
-    [-2, 3, 5],
-    [0, 2, 6],
-  ].map((p) => new THREE.Vector3(...p)),
-  true
-);
-
-function CoasterCart() {
-  const ref = useRef();
-  const t = useRef(0);
-  useFrame((_, dt) => {
-    t.current = (t.current + dt * 0.07) % 1;
-    const p = COASTER_CURVE.getPointAt(t.current);
-    const tan = COASTER_CURVE.getTangentAt(t.current);
-    if (ref.current) {
-      ref.current.position.set(p.x, p.y + 0.28, p.z);
-      ref.current.rotation.y = Math.atan2(tan.x, tan.z);
-    }
-  });
-  return (
-    <mesh ref={ref} castShadow>
-      <boxGeometry args={[0.8, 0.5, 1.2]} />
-      <meshStandardMaterial color="#ffd166" emissive="#ffd166" emissiveIntensity={0.4} metalness={0.4} roughness={0.4} />
-    </mesh>
-  );
-}
-
-// Coaster = experience. Trackside billboards (role + org + dates).
-function Coaster() {
-  const C = "#ff006e";
-  const spots = [
-    [6, 2.8, 3],
-    [-6, 2.8, 2],
-    [5, 2.8, -6],
-    [-5, 2.8, -5],
-  ];
-  return (
-    <group position={[20, 0, -16]}>
-      <mesh>
-        <tubeGeometry args={[COASTER_CURVE, 120, 0.18, 10, true]} />
-        <meshStandardMaterial color="#ff006e" emissive="#ff006e" emissiveIntensity={0.4} metalness={0.5} roughness={0.4} />
-      </mesh>
-      {[-5, 0, 5].map((x, i) => (
-        <mesh key={i} position={[x, 1, 0]} castShadow>
-          <boxGeometry args={[0.3, 2, 0.3]} />
-          <meshStandardMaterial color="#1a2332" />
-        </mesh>
-      ))}
-      <CoasterCart />
-
-      {portfolio.experience.map((e, i) => {
-        const spot = spots[i % spots.length];
-        return (
-          <Billboard
-            key={i}
-            position={spot}
-            width={3.8}
-            height={2.1}
-            color={C}
-            heading={e.role}
-            headingSize={0.34}
-            lines={[e.org, cleanDate(e.dates), e.note || ""]}
-            bodySize={0.22}
-            near={7}
-            far={16}
-            faceCamera
-          />
-        );
-      })}
-
-      <Marker position={[0, 7, 0]} color={C} size={0.7} near={11} far={26}>
-        EXPERIENCE
-      </Marker>
-    </group>
-  );
-}
-
-// Skills street = a row of category billboards down a neon street.
 function SkillsStreet() {
   const C = "#06d6a0";
-  const cats = Object.entries(portfolio.skills); // [key, arr]
+  const cats = Object.entries(portfolio.skills);
   return (
-    <group position={[-20, 0, 16]}>
-      {/* street strip — dark asphalt with neon edge trim (was a flat green plane) */}
+    <group position={[-14, 0, 28]}>
       <mesh position={[0, 0.03, -2]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <planeGeometry args={[5.5, 16]} />
         <meshStandardMaterial color="#16131c" roughness={0.85} metalness={0.1} />
@@ -554,10 +419,9 @@ function SkillsStreet() {
           <meshStandardMaterial color={C} emissive={C} emissiveIntensity={1.3} toneMapped={false} />
         </mesh>
       ))}
-
       {cats.map(([key, arr], i) => {
         const left = i % 2 === 0;
-        const z = 6 - i * 2; // 6,4,2,0,-2,-4,-6
+        const z = 6 - i * 2;
         const x = left ? -3.8 : 3.8;
         const ry = left ? Math.PI / 2 : -Math.PI / 2;
         return (
@@ -578,8 +442,6 @@ function SkillsStreet() {
           />
         );
       })}
-
-      {/* entrance: a marker + an inspect point for the full skills + certs */}
       <Inspectable id="skills" beat="skills" title="SKILLS · full stack + certs" range={6} offsetY={2.6}>
         <Marker position={[0, 3.4, 7.5]} color={C} size={0.6} near={10} far={22}>
           {"SKILLS STREET\nwalk through · press E to inspect"}
@@ -589,13 +451,11 @@ function SkillsStreet() {
   );
 }
 
-// Academy = education. Façade rotated toward the plaza, with engraved plaques.
 function Academy() {
   const C = "#ffd60a";
-  // face the columned (+Z) façade toward the origin/plaza
-  const yaw = Math.atan2(-20, -18);
+  const yaw = Math.atan2(-30, -14);
   return (
-    <group position={[20, 0, 18]} rotation={[0, yaw, 0]}>
+    <group position={[14, 0, 30]} rotation={[0, yaw, 0]}>
       <mesh position={[0, 2, 0]} castShadow>
         <boxGeometry args={[6, 4, 4]} />
         <meshStandardMaterial color="#ffd60a" emissive="#ffd60a" emissiveIntensity={0.1} metalness={0.3} roughness={0.6} />
@@ -610,7 +470,6 @@ function Academy() {
         <coneGeometry args={[4, 1.4, 4]} />
         <meshStandardMaterial color="#ffb020" emissive="#ffb020" emissiveIntensity={0.3} />
       </mesh>
-
       {portfolio.education.map((ed, i) => (
         <Plaque
           key={i}
@@ -627,7 +486,6 @@ function Academy() {
           faceCamera
         />
       ))}
-
       <Marker position={[0, 6.4, 0]} color={C} size={0.66} near={11} far={26}>
         EDUCATION
       </Marker>
@@ -635,22 +493,19 @@ function Academy() {
   );
 }
 
-// Portal = contact. A kiosk whose panels physically carry the links.
 function Portal() {
   const C = "#06ffa5";
   const linkedin = portfolio.linkedin.replace(/^https?:\/\//, "");
   return (
-    <group position={[0, 0, 30]}>
+    <group position={[0, 0, 40]}>
       <mesh position={[0, 2.5, 0]}>
         <torusGeometry args={[2, 0.25, 20, 48]} />
         <meshStandardMaterial color={C} emissive={C} emissiveIntensity={1} />
       </mesh>
       <mesh position={[0, 2.5, 0]}>
         <circleGeometry args={[1.8, 48]} />
-        {/* custom-GLSL energy field (shader scaffold) */}
         <EnergyMat color={C} intensity={0.9} speed={1.6} />
       </mesh>
-
       <Inspectable id="contact" beat="contact" title="CONTACT · let's connect" range={6} offsetY={3.4}>
         <Billboard
           position={[0, 2.6, 2.4]}
@@ -670,18 +525,14 @@ function Portal() {
   );
 }
 
-// Plaza = intro + about. Welcome arch (name/headline) + bio engraved on a plinth.
 function Plaza() {
   const C = "#00d4ff";
   return (
     <group>
-      {/* plaza ring */}
       <mesh position={[0, 0.03, 4]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[3.6, 4, 48]} />
         <meshStandardMaterial color={C} emissive={C} emissiveIntensity={0.6} side={THREE.DoubleSide} />
       </mesh>
-
-      {/* welcome arch */}
       {[-3, 3].map((x, i) => (
         <mesh key={i} position={[x, 2, 1.2]} castShadow>
           <cylinderGeometry args={[0.28, 0.32, 4, 16]} />
@@ -705,8 +556,6 @@ function Plaza() {
         far={22}
         faceCamera
       />
-
-      {/* about statue + engraved plinth */}
       <group position={[9, 0, 6]}>
         <mesh position={[0, 0.5, 0]} castShadow>
           <cylinderGeometry args={[0.8, 1, 1, 24]} />
@@ -730,12 +579,31 @@ function Plaza() {
           faceCamera
         />
       </group>
+
+      {/* world-map plaque (Phase 2.3): all four zones at a glance */}
+      <group position={[-4, 0, 0]}>
+        <mesh position={[0, 1.4, 0]} rotation={[0, Math.PI / 7, 0]} castShadow>
+          <boxGeometry args={[2.6, 0.1, 2.0]} />
+          <meshStandardMaterial color="#0b1222" metalness={0.5} roughness={0.4} />
+        </mesh>
+        <Plaque
+          position={[0, 1.5, 0]}
+          rotation={[-Math.PI / 2.05, 0, Math.PI / 7]}
+          width={2.4}
+          height={1.8}
+          color="#00d4ff"
+          heading="World Map"
+          headingSize={0.18}
+          lines={["← Left: Eiffel Lift · Racetrack", "Right: Roller Coaster · Circus → ", "", "Street · Academy · Portal beyond"]}
+          bodySize={0.13}
+          near={5}
+          far={12}
+        />
+      </group>
     </group>
   );
 }
 
-// Trophy podium — the Srujana TechFest award + certifications, engraved.
-// West side of the plaza so name (N) / about (E) / achievements (W) stay clear.
 function Trophy() {
   const C = "#ffd166";
   return (
@@ -775,7 +643,6 @@ function Trophy() {
   );
 }
 
-// Instanced pillars ringing the plaza (single draw call).
 function PlazaPillars() {
   const positions = useMemo(() => {
     const out = [];
@@ -797,58 +664,62 @@ function PlazaPillars() {
 }
 
 // ============================================================================
-// HubWorld root
+// Metaverse root
 // ============================================================================
-export default function HubWorld() {
+export default function Metaverse() {
   const moveTargetRef = useRef(null);
+  const [introDone, setIntroDone] = useState(prefersReducedMotion);
 
   return (
     <>
-      {/* Warm dusk sky + matching haze (mirrors CreatureRun's recipe). The HDRI
-          below drives image-based lighting only; an explicit <color> guarantees a
-          warm, atmospheric backdrop that wins over the global Experience color and
-          doesn't depend on the HDRI streaming in as a background. */}
       <color attach="background" args={["#241823"]} />
-      <fog attach="fog" args={["#3a2a30", 28, 130]} />
+      <fog attach="fog" args={["#3a2a30", 28, 150]} />
       <Suspense fallback={null}>
         <ModelBoundary fallback={null}>
           <Environment files="/hdri/venice_sunset_1k.hdr" environmentIntensity={1.3} />
         </ModelBoundary>
       </Suspense>
 
-      {/* HubWorld mood rig (on top of the global lights): warm sunset key/rim +
-          cool fill, and pools of light at the plaza, portal and tower beacon so
-          the world reads as lit rather than a flat grey box. */}
       <hemisphereLight args={["#ffcf9e", "#241526", 0.6]} />
       <ambientLight intensity={0.12} color="#ffcaa0" />
       <directionalLight position={[-26, 16, -8]} intensity={0.9} color="#ff9a5a" />
       <pointLight position={[0, 8, 6]} intensity={130} distance={34} color="#ffb066" />
-      <pointLight position={[0, 5, 30]} intensity={70} distance={24} color="#06ffa5" />
-      <pointLight position={[TOWER.x, 13, TOWER.z]} intensity={80} distance={26} color="#ff8c42" />
+      <pointLight position={[0, 5, 40]} intensity={70} distance={24} color="#06ffa5" />
+      <pointLight position={[EIFFEL_POS.x, 13, EIFFEL_POS.z]} intensity={80} distance={26} color="#ff8c42" />
 
-      {/* ambient atmosphere motes */}
-      <Particles count={170} color="#d8c4a0" center={[0, 9, 0]} area={[120, 28, 120]} size={0.16} opacity={0.4} />
+      <Particles count={170} color="#d8c4a0" center={[0, 9, 0]} area={[140, 28, 140]} size={0.16} opacity={0.4} />
 
+      {!introDone && <CloudIntro onDone={() => setIntroDone(true)} />}
+
+      {/* The podium + the world glimpsed below the clouds — kept light so the
+          very first commit is cheap and the intro's gesture listener attaches
+          reliably. The four (procedurally heavier) zones mount only once the
+          cloud-part finishes; they're far from the podium and not visible
+          during the reveal anyway, so deferring them costs nothing visually. */}
       <Physics gravity={[0, -20, 0]}>
         <Ground moveTargetRef={moveTargetRef} />
-        <Avatar moveTargetRef={moveTargetRef} />
+        <Avatar moveTargetRef={moveTargetRef} controlsEnabled={introDone} />
         <Plaza />
         <PlazaPillars />
         <Trophy />
-        <Tower />
-        <Coaster />
-        <SkillsStreet />
-        <Academy />
-        <Portal />
+        {introDone && (
+          <>
+            <EiffelLift />
+            <RollerCoaster />
+            <CircusTent />
+            <Racetrack />
+            <SkillsStreet />
+            <Academy />
+            <Portal />
+          </>
+        )}
       </Physics>
 
-      {/* story layer — guide companion + a local NPC at each landmark */}
       <Guide />
       {Object.entries(NPC_SPOTS).map(([beat, pos]) => (
         <StoryNPC key={beat} beat={beat} position={pos} />
       ))}
 
-      {/* diegetic dense-content terminal (opens from any Inspectable) */}
       <InspectTerminal />
     </>
   );

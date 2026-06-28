@@ -454,6 +454,74 @@ body {
 }
 .npc-skip:hover { color: #fff; }
 
+/* ==================== BATTLE SCENE (Creature Quest encounters) ==================== */
+.battle-panel {
+  width: 320px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(10, 8, 20, 0.97), rgba(16, 10, 28, 0.97));
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 44px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 0.82rem;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.battle-body { padding: 0.9rem 1rem 1.1rem; }
+.battle-hprow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+.battle-discipline {
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.battle-hpbar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  margin-bottom: 0.7rem;
+}
+.battle-hpfill { height: 100%; transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+.battle-log { min-height: 2.4em; color: var(--text-dim); margin-bottom: 0.6rem; line-height: 1.4; }
+.battle-moves { display: flex; flex-direction: column; gap: 0.4rem; }
+.battle-move-btn {
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  transition: all 0.2s ease;
+}
+.battle-move-btn:hover { background: rgba(255, 255, 255, 0.13); border-color: var(--accent); }
+.battle-tag {
+  font-size: 0.55rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7fdfff;
+  white-space: nowrap;
+}
+.battle-victory h3 { font-size: 1rem; margin-bottom: 0.3rem; }
+.battle-victory .note { color: var(--text-dim); margin-bottom: 0.4rem; }
+.battle-status { font-size: 0.74rem; color: var(--text-dim); margin-bottom: 0.6rem; }
+.battle-badge { font-size: 0.78rem; color: #ffd60a; margin-bottom: 0.7rem; }
+.battle-continue { justify-content: center; background: rgba(0, 212, 255, 0.15); border-color: rgba(0, 212, 255, 0.5); }
+
 /* ==================== RÉSUMÉ READER (corner button + reduced-motion fallback) ==================== */
 .resume-btn {
   position: fixed;
